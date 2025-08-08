@@ -1,164 +1,100 @@
+# Backend Search & Performance Optimization System
 
-# Document Search API
+## Overview
+This project implements a **high-performance backend search system** with:
+- **Index-based search** for fast lookups
+- **Type-ahead (autocomplete)** for real-time predictive search
+- **Rate limiting** to prevent abuse and ensure fair API usage
+- **Trending documents tracker** to highlight popular content
 
-This project is a backend service for storing and searching documents with features like:
-- **Indexed search** for fast lookups
-- **Type-ahead (autocomplete)** for search suggestions
-- **Rate limiting** to prevent abuse
-- **View tracking** using Redis for ranking documents
-
-The service uses:
-- **Go** for backend logic
-- **MongoDB** for document storage
-- **Redis** for caching, scoring, and rate limiting
+**Tech Stack:** Go, MongoDB, Redis, Docker, REST API
 
 ---
 
-## Features & Concepts
+## Features
 
 ### 1. Index Search
 **What it is:**  
-Index search uses a pre-built data structure to locate documents quickly instead of scanning every document.  
-MongoDB creates **indexes** on fields (like `title` or `content`) so lookups are extremely fast.
+Index search uses database indexes (in MongoDB) to quickly find matching records without scanning the entire collection.  
+By indexing fields like `name` or `keywords`, the database can locate matches in milliseconds, even in datasets with millions of documents.
 
-**How it works here:**
-- We create a **text index** in MongoDB on relevant fields (`title`, `content`).
-- When you search for a word, MongoDB matches only the indexed terms, skipping irrelevant documents.
-- This is much faster than a full collection scan.
-
-**Example:**
-```js
-db.documents.createIndex({ title: "text", content: "text" });
-````
-
-When searching `"network security"`, MongoDB instantly finds documents containing these terms using the index.
+**How it works in this project:**  
+- Created MongoDB indexes on searchable fields.
+- Queries use `$regex` and `$text` search with index optimization.
+- Significantly reduces query execution time.
 
 ---
 
-### 2. Type-ahead Search (Autocomplete)
+### 2. Type-Ahead Search (Autocomplete)
+**What it is:**  
+A type-ahead search predicts and suggests results as the user types, improving the search experience.
 
-**What it is:**
-Type-ahead shows possible matches as you start typing (e.g., typing "net" suggests "network security", "network programming", etc.).
-
-**How it works here:**
-
-* We maintain a sorted set or prefix list in Redis containing all searchable terms.
-* As a user types, we fetch terms starting with that prefix.
-* This returns suggestions without querying the whole database.
-
-**Example:**
-If Redis stores:
-
-```
-network security
-network programming
-netflix data analysis
-```
-
-Typing `"net"` immediately shows all terms starting with `"net"`.
+**How it works in this project:**  
+- Captures the user’s input in real-time.
+- Performs partial matches against indexed fields.
+- Returns the top N relevant results for each keystroke.
+- Uses MongoDB's efficient index lookups for low latency.
 
 ---
 
 ### 3. Rate Limiter
+**What it is:**  
+A rate limiter controls the number of API requests a client can make in a given time frame, preventing abuse and ensuring fair usage.
 
-**What it is:**
-Rate limiting controls how many requests a user can make within a time window to avoid abuse (e.g., preventing one IP from making thousands of searches in seconds).
-
-**How it works here:**
-
-* We use Redis to store a counter for each IP or user.
-* When a request comes in:
-
-  1. Increment the counter in Redis.
-  2. If the counter exceeds the allowed limit, block the request.
-  3. The counter resets after the time window (e.g., 60 seconds).
-
-**Example:**
-
-```
-Limit: 10 searches per minute
-User searches 12 times in 60 seconds → last 2 requests are rejected
-```
+**How it works in this project:**  
+- Implemented using Redis as a fast in-memory store.
+- Stores request counts per user/IP with an expiration time.
+- If the request limit is exceeded, the API returns an error with a cooldown period.
 
 ---
 
-## How the System Works Together
+### 4. Trending Documents Tracker
+**What it is:**  
+Tracks the most accessed documents and ranks them in real time.
 
-1. **Document Insertion**
-
-   * Documents are stored in MongoDB.
-   * Title & content are indexed for search.
-   * Keywords are stored in Redis for type-ahead.
-
-2. **Searching**
-
-   * User sends a query.
-   * Rate limiter checks if the request is allowed.
-   * MongoDB uses its text index to quickly return matching documents.
-   * If using type-ahead mode, Redis returns suggestions instantly.
-
-3. **Document Viewing**
-
-   * When a document is clicked, Redis increments its score in a sorted set (`document_scores`).
-   * This score can be used to show trending/popular documents.
-
-4. **Performance**
-
-   * **MongoDB** handles main document storage & full-text search.
-   * **Redis** handles quick prefix lookups, trending docs, and rate limiting.
+**How it works in this project:**  
+- Uses Redis Sorted Sets to store document IDs with their access frequency.
+- On every document view, increments its score.
+- A separate endpoint retrieves the top N trending documents.
 
 ---
 
-## Example Request Flow
+## System Workflow
 
-1. User starts typing `"net"`.
+1. **User Search Request**  
+   - The API receives the search query.
+   - Type-ahead logic processes partial inputs.
+   - Index search is performed on MongoDB for fast matching.
 
-   * **Redis** returns `"network security"`, `"network programming"`, `"netflix data analysis"`.
+2. **Rate Limiting Check**  
+   - Redis checks if the user/IP has exceeded allowed request limits.
+   - If yes → request is blocked.  
+   - If no → search proceeds.
 
-2. User selects `"network security"`.
+3. **Return Results**  
+   - Matching documents are returned.
+   - Document access is logged in Redis for trending tracking.
 
-   * **MongoDB** returns all matching documents using the text index.
-
-3. User clicks a document.
-
-   * **Redis** increments its popularity score.
-
-4. Another user searches the same.
-
-   * The popular document appears higher in results.
-
----
-
-## Tech Stack
-
-* **Go** — Backend service
-* **MongoDB** — Document database
-* **Redis** — Caching, type-ahead, rate limiter, and scoring
-* **React** - Frontend
+4. **Trending Update**  
+   - Each access increments the document’s popularity score in Redis.
+   - Top trending documents are available via a dedicated API.
 
 ---
 
-## Example Commands
+## Example API Endpoints
 
-### Create Text Index in MongoDB
+| Endpoint                | Method | Description                              |
+|------------------------|--------|------------------------------------------|
+| `/search?q=query`      | GET    | Search documents (type-ahead + index)    |
+| `/document/{id}`       | GET    | Retrieve a single document               |
+| `/trending`            | GET    | Get top trending documents               |
 
-```bash
-db.documents.createIndex({ title: "text", content: "text" });
-```
+---
 
-### Redis Commands for Type-ahead
+## Why This Matters
+- **Performance:** Index search and Redis caching make lookups extremely fast.
+- **Scalability:** Handles high traffic without degrading performance.
+- **User Experience:** Type-ahead search improves engagement.
+- **Security & Fairness:** Rate limiting prevents abuse and server overload.
 
-```bash
-ZADD search_terms 0 "network security"
-ZADD search_terms 0 "network programming"
-ZRANGEBYLEX search_terms [net [net\xff
-```
-
-### Redis Rate Limiter (per IP)
-
-```bash
-INCR user:192.168.1.5
-EXPIRE user:192.168.1.5 60
-```
-
-
+---
