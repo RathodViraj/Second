@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, Link } from "react-router-dom";
+
 
 const Search = () => {
   const location = useLocation();
@@ -17,6 +18,7 @@ const Search = () => {
           const res = await fetch(`http://localhost:8080/search?q=${encodeURIComponent(query)}`);
           const data = await res.json();
           setResults(data.results || []);
+          console.log("Search results:", data.results);
         } catch (err) {
           console.error("Search failed:", err);
         }
@@ -32,10 +34,10 @@ const Search = () => {
     <div className="p-4">
       <h2 className="text-xl mb-4">Search Results for: {query}</h2>
       <ul className="list-disc pl-5 space-y-2">
-        {results.map((doc, index) => (
-          <li key={doc.id}>
-            <Link to={`/document/${doc.id}`} className="text-blue-500 hover:underline">
-              {doc.title}
+        { results.map((doc, index) => (
+          <li key={doc.id || index}>
+            <Link to={`/document/${doc._id}`} className="text-blue-500 hover:underline">
+              {doc.title || `Document ${index + 1}`}
             </Link>
           </li>
         ))}

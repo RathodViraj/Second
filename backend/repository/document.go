@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,27 +35,26 @@ func NewDocumentRepo(rdb *redis.Client) *DocumentRepo {
 	}
 }
 
-func (r *DocumentRepo) AddDocumentToDB(doc model.Document) (string, error) {
+func (r *DocumentRepo) AddDocumentToDB(doc *model.Document) error {
+	doc.Created = time.Now()
+
 	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
 	defer cancel()
 
 	collection := db.GetCollection("secondDB", "documents")
 
-	if doc.Created.IsZero() {
-		doc.Created = time.Now()
-	}
-
 	result, err := collection.InsertOne(ctx, doc)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	objectID, ok := result.InsertedID.(primitive.ObjectID)
 	if !ok {
-		return "", errors.New("failed to parse inserted ID")
+		return errors.New("failed to parse inserted ID")
 	}
+	doc.ID = objectID
 
-	return objectID.Hex(), nil
+	return nil
 }
 
 func (r *DocumentRepo) IndexDoc(docID, text string) error {
@@ -69,35 +69,59 @@ func (r *DocumentRepo) IndexDoc(docID, text string) error {
 	_, err := pipe.Exec(r.ctx)
 	if err == nil {
 		r.rdb.Incr(r.ctx, "meta:totalDocs")
+		return nil
 	}
 
-	return err
+	retryData := map[string]string{
+		"docID": docID,
+		"text":  text,
+	}
+	data, _ := json.Marshal(retryData)
+
+	if pushErr := r.rdb.LPush(r.ctx, "retry:index_queue", data).Err(); pushErr != nil {
+		return fmt.Errorf("index failed: %v, retry queue push failed: %v", err, pushErr)
+	}
+
+	return fmt.Errorf("index failed, added to retry queue: %w", err)
 }
 
 func (r *DocumentRepo) GetDocumentByID(docID string) (model.Document, error) {
-	collection := db.GetCollection("mydocsdb", "documents")
+	collection := db.GetCollection("secondDB", "documents")
 	var doc model.Document
 
-	if err := collection.FindOne(context.TODO(), bson.M{"_id": docID}).Decode(&doc); err != nil {
+	objectID, err := primitive.ObjectIDFromHex(docID)
+	if err != nil {
 		return model.Document{}, err
 	}
+
+	if err := collection.FindOne(context.TODO(), bson.M{"_id": objectID}).Decode(&doc); err != nil {
+		return model.Document{}, err
+	}
+
+	score := r.rdb.ZScore(r.ctx, "trending_docs", docID).Val()
+	r.rdb.ZAdd(r.ctx, "trending_docs",
+		redis.Z{
+			Score:  score + 1,
+			Member: docID,
+		})
 
 	return doc, nil
 }
 
 func (r *DocumentRepo) GetDocTitle(docID string) (string, error) {
-	collection := db.GetCollection("mydocsdb", "documents")
+	collection := db.GetCollection("secondDB", "documents")
 	var doc model.Document
 
-	if err := collection.FindOne(context.TODO(), bson.M{"_id": docID}).Decode(&doc); err != nil {
+	if err := collection.FindOne(context.TODO(), bson.M{"id": docID}).Decode(&doc); err != nil {
 		return "", err
 	}
 
 	return doc.Title, nil
 }
 
-func (r *DocumentRepo) SearchIF_IDF(query string, offset int) ([]string, error) {
+func (r *DocumentRepo) SearchIF_IDF(query string, offset int) ([]model.Document, error) {
 	words := utils.Tokenize(query)
+	log.Printf("Searching for words: %v", words)
 
 	totalDocs, err := r.rdb.Get(r.ctx, "meta:totalDocs").Int()
 	if err != nil {
@@ -107,12 +131,11 @@ func (r *DocumentRepo) SearchIF_IDF(query string, offset int) ([]string, error) 
 	scoreMap := make(map[string]float64)
 	pipe := r.rdb.Pipeline()
 
-	// Stage ZCard and ZRangeWithScores for all words
 	zcardCmds := make(map[string]*redis.IntCmd)
 	zrangeCmds := make(map[string]*redis.ZSliceCmd)
 	for _, w := range words {
 		zcardCmds[w] = pipe.ZCard(r.ctx, "index:"+w)
-		zrangeCmds[w] = pipe.ZRangeWithScores(r.ctx, "index:"+w, int64(offset), int64(offset+10-1))
+		zrangeCmds[w] = pipe.ZRangeWithScores(r.ctx, "index:"+w, 0, -1)
 	}
 
 	_, err = pipe.Exec(r.ctx)
@@ -154,10 +177,55 @@ func (r *DocumentRepo) SearchIF_IDF(query string, offset int) ([]string, error) 
 
 	top := min(len(results), 10)
 
-	var rankedDocs []string
-	for i := range top {
-		rankedDocs = append(rankedDocs, results[i].DocID)
+	var rankedDocs []model.Document
+	for i := 0; i < top; i++ {
+
+		objectID, err := primitive.ObjectIDFromHex(results[i].DocID)
+		if err != nil {
+			log.Printf("Invalid ObjectID: %s, error: %v\n", results[i].DocID, err)
+			continue
+		}
+
+		doc, err := r.GetDocumentByID(objectID.Hex())
+		if err != nil {
+			log.Printf("Could not fetch doc for ID %s: %v\n", objectID.Hex(), err)
+			continue
+		}
+
+		rankedDocs = append(rankedDocs, doc)
+	}
+
+	for _, w := range words {
+		r.rdb.ZIncrBy(r.ctx, "typeahead", 1, w)
 	}
 
 	return rankedDocs, nil
+}
+
+func (r *DocumentRepo) StartRetryWorker(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for {
+			res, err := r.rdb.BRPop(r.ctx, 1*time.Second, "retry:index_queue").Result()
+			if err == redis.Nil {
+				break
+			}
+			if err != nil {
+				log.Println("Error popping from retry queue:", err)
+				break
+			}
+
+			var job map[string]string
+			if err := json.Unmarshal([]byte(res[1]), &job); err != nil {
+				log.Println("Invalid job data:", err)
+				continue
+			}
+
+			if err := r.IndexDoc(job["docID"], job["text"]); err != nil {
+				log.Println("Retry failed for doc:", job["docID"], err)
+			}
+		}
+	}
 }

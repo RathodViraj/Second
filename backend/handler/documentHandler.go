@@ -6,7 +6,6 @@ import (
 	"second/repository"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -41,26 +40,26 @@ func (h *DocHandler) AddDocument(c *gin.Context) {
 		return
 	}
 
-	doc.ID = primitive.NewObjectID()
-	doc.Created = time.Now()
-
-	docID, err := h.docRepo.AddDocumentToDB(doc)
+	err := h.docRepo.AddDocumentToDB(&doc)
 	if err != nil {
 		JSONError(http.StatusInternalServerError, c, "Failed to add document")
 		return
 	}
 
 	req := &model.IndexRequest{
-		DocID: docID,
+		DocID: (doc.ID).Hex(),
 		Text:  doc.Content,
 	}
 
 	if err := h.docRepo.IndexDoc(req.DocID, req.Text); err != nil {
-		JSONError(http.StatusInternalServerError, c, "Faild to index")
+		JSONError(http.StatusInternalServerError, c, "Failed to index")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "indexed"})
+	c.JSON(http.StatusOK, gin.H{
+		"status": "indexed",
+		"doc_id": doc.ID,
+	})
 }
 
 func (h *DocHandler) Search(c *gin.Context) {
@@ -101,6 +100,7 @@ func (h *DocHandler) GetDocumentByID(c *gin.Context) {
 	doc, err := h.docRepo.GetDocumentByID(docID.Hex())
 	if err != nil {
 		JSONError(http.StatusNotFound, c, "Not found")
+		return
 	}
 
 	c.JSON(http.StatusOK, doc)

@@ -7,9 +7,9 @@ import (
 )
 
 type Document struct {
-	ID      primitive.ObjectID `json:"_id,omitempty"`
-	Title   string             `json:"title"`
-	Content string             `json:"content"`
-	Tags    []string           `json:"tags"`
-	Created time.Time          `json:"created"`
+	ID      primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Title   string             `bson:"title" json:"title"`
+	Content string             `bson:"content" json:"content"`
+	Tags    []string           `bson:"tags" json:"tags"`
+	Created time.Time          `bson:"created" json:"created"`
 }

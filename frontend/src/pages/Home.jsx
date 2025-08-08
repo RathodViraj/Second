@@ -4,11 +4,12 @@ import { useNavigate } from "react-router-dom";
 const Home = () => {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [manualSelection, setManualSelection] = useState(false);
   const wsRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Connect to WebSocket on mount
     wsRef.current = new WebSocket("ws://localhost:8080/typeahead");
 
     wsRef.current.onopen = () => {
@@ -19,6 +20,7 @@ const Home = () => {
       const data = JSON.parse(event.data);
       if (data.suggestions) {
         setSuggestions(data.suggestions);
+        setSelectedIndex(-1); // reset selection on new suggestions
       }
     };
 
@@ -35,9 +37,13 @@ const Home = () => {
     };
   }, []);
 
-  // Send typeahead request on input change
   useEffect(() => {
     const handler = setTimeout(() => {
+      if (manualSelection) {
+        setManualSelection(false);
+        return;
+      }
+
       if (
         query.length >= 3 &&
         query.length <= 20 &&
@@ -47,18 +53,16 @@ const Home = () => {
           prefix: query,
           limit: 5,
         };
-        
-        console.log("Sending typeahead request:", query);
-        
+
         wsRef.current.send(JSON.stringify(payload));
       } else {
         setSuggestions([]);
+        setSelectedIndex(-1);
       }
-    }, 300); // 300ms debounce
+    }, 400);
 
-    return () => clearTimeout(handler); // cleanup previous timer
+    return () => clearTimeout(handler);
   }, [query]);
-
 
   const handleSearch = () => {
     if (query.trim() !== "") {
@@ -67,22 +71,48 @@ const Home = () => {
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter") handleSearch();
+    if (suggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const newIndex = (selectedIndex + 1) % suggestions.length;
+        setSelectedIndex(newIndex);
+        setQuery(suggestions[newIndex]);
+        setManualSelection(true);
+        return;
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const newIndex =
+          (selectedIndex - 1 + suggestions.length) % suggestions.length;
+        setSelectedIndex(newIndex);
+        setQuery(suggestions[newIndex]);
+        setManualSelection(true);
+        return;
+      }
+    }
+
+    if (e.key === "Enter") {
+      handleSearch();
+    }
   };
+
 
   const handleSuggestionClick = (s) => {
     setQuery(s);
     setSuggestions([]);
+    setSelectedIndex(-1);
+    setManualSelection(true)
   };
 
   return (
     <div
       style={{
         display: "flex",
+        height: "100vh",
         justifyContent: "center",
         alignItems: "center",
         flexDirection: "column",
-        marginTop: "4rem", // ✅ gives some space under the navbar
+        position: "relative",
+        top: "-100px",
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -90,7 +120,10 @@ const Home = () => {
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(-1);
+            }}
             onKeyDown={handleKeyDown}
             placeholder="Search..."
             style={{
@@ -117,7 +150,6 @@ const Home = () => {
           </button>
         </div>
 
-        {/* Typeahead Suggestions */}
         {suggestions.length > 0 && (
           <ul
             style={{
@@ -142,6 +174,7 @@ const Home = () => {
                 style={{
                   padding: "0.5rem",
                   cursor: "pointer",
+                  backgroundColor: selectedIndex === index ? "#f0f0f0" : "transparent",
                 }}
               >
                 {s}

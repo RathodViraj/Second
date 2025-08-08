@@ -29,16 +29,16 @@ const Trending = () => {
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-3xl font-semibold mb-6">🔥 Trending Documents (Last 1 Hour)</h1>
       <ul className="space-y-3">
-        {trendingDocs.length === 0 ? (
-          <p>No trending documents found.</p>
-        ) : (
+        {Array.isArray(trendingDocs) && trendingDocs.length > 0 ?  (
           trendingDocs.slice(0, 50).map((doc, index) => (
             <li key={index} className="border-b pb-2 flex justify-between items-center">
               <span className="text-lg font-medium">{doc.title}</span>
               <span className="text-sm text-gray-600">{doc.views} views</span>
             </li>
           ))
-        )}
+        )
+          : <li className="text-gray-500">No trending documents found.</li>
+        }
       </ul>
     </div>
   );
