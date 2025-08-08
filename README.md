@@ -134,6 +134,7 @@ User searches 12 times in 60 seconds → last 2 requests are rejected
 * **Go** — Backend service
 * **MongoDB** — Document database
 * **Redis** — Caching, type-ahead, rate limiter, and scoring
+* **React** - Frontend
 
 ---
 
